@@ -15,6 +15,7 @@ import (
 func TestParseDatabases(t *testing.T) {
 	currentTime := time.Now()
 	currentTimeFWValue := timetypes.NewRFC3339TimePointerValue(&currentTime)
+	restoreTime := currentTime.Add(-time.Hour)
 
 	mockDB1 := linodego.Database{
 		ID:          123,
@@ -34,7 +35,8 @@ func TestParseDatabases(t *testing.T) {
 			Source:      12345,
 			RestoreTime: &currentTime,
 		},
-		OldestRestoreTime: &currentTime,
+		OldestRestoreTime:     &currentTime,
+		AvailableRestoreTimes: []time.Time{restoreTime},
 	}
 
 	mockDB2 := linodego.Database{
@@ -71,6 +73,7 @@ func TestParseDatabases(t *testing.T) {
 	assert.Equal(t, types.StringValue("example-db-1"), model.Databases[0].Label)
 	assert.Equal(t, currentTimeFWValue, model.Databases[0].ForkRestoreTime)
 	assert.Equal(t, currentTimeFWValue, model.Databases[0].OldestRestoreTime)
+	assert.Equal(t, []types.String{types.StringValue(restoreTime.Format(time.RFC3339))}, model.Databases[0].AvailableRestoreTimes)
 	assert.Equal(t, int64(12345), model.Databases[0].ForkSource.ValueInt64())
 
 	// Database 2 Assertions
@@ -79,5 +82,6 @@ func TestParseDatabases(t *testing.T) {
 	assert.Equal(t, types.StringValue("example-db-2"), model.Databases[1].Label)
 	assert.Equal(t, currentTimeFWValue, model.Databases[1].ForkRestoreTime)
 	assert.Equal(t, currentTimeFWValue, model.Databases[1].OldestRestoreTime)
+	assert.Nil(t, model.Databases[1].AvailableRestoreTimes)
 	assert.Equal(t, int64(54321), model.Databases[1].ForkSource.ValueInt64())
 }
