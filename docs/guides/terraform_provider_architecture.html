@@ -1,0 +1,449 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="description" content="A source-grounded guide to the Terraform Linode provider architecture and the Valkey managed database implementation.">
+  <title>How Terraform Reaches Linode | Provider Architecture</title>
+  <style>
+    :root {
+      color-scheme: light;
+      --ink: #172a35;
+      --muted: #526874;
+      --paper: #f3f6f5;
+      --surface: #ffffff;
+      --line: #cbd7d6;
+      --teal: #087e83;
+      --teal-soft: #dcefed;
+      --blue: #2a5f8c;
+      --blue-soft: #e4edf5;
+      --orange: #a64c27;
+      --orange-soft: #f7e7dc;
+      --green: #2e6c4a;
+      --green-soft: #e3f0e8;
+      --shadow: 0 10px 28px rgba(20, 50, 59, .08);
+    }
+
+    * { box-sizing: border-box; }
+
+    html { scroll-behavior: smooth; }
+
+    body {
+      margin: 0;
+      background: var(--paper);
+      color: var(--ink);
+      font-family: "Segoe UI", "Aptos", sans-serif;
+      line-height: 1.6;
+    }
+
+    a { color: #075e70; text-decoration-thickness: .08em; text-underline-offset: .16em; }
+    a:hover { color: #093d52; }
+    code, pre { font-family: "Cascadia Code", "SFMono-Regular", Consolas, monospace; }
+    code { color: #124e59; font-size: .94em; }
+
+    .page { width: min(1120px, calc(100% - 40px)); margin: 0 auto; }
+
+    .masthead {
+      padding: 46px 0 30px;
+      border-bottom: 1px solid var(--line);
+      background: linear-gradient(110deg, #e1efec 0%, #f6f7f4 52%, #f4e8db 100%);
+    }
+
+    .eyebrow {
+      margin: 0 0 10px;
+      color: var(--teal);
+      font-size: .78rem;
+      font-weight: 750;
+      text-transform: uppercase;
+    }
+
+    h1, h2, h3 { line-height: 1.2; }
+    h1 { max-width: 760px; margin: 0; font-size: clamp(2.2rem, 5vw, 3.8rem); font-weight: 760; }
+    .lede { max-width: 790px; margin: 18px 0 0; color: #304954; font-size: 1.12rem; }
+
+    .meta-row { display: flex; flex-wrap: wrap; gap: 8px 22px; margin-top: 20px; color: var(--muted); font-size: .88rem; }
+
+    .layout { display: grid; grid-template-columns: 220px minmax(0, 1fr); gap: 34px; padding: 30px 0 70px; }
+
+    nav {
+      position: sticky;
+      top: 18px;
+      align-self: start;
+      padding: 17px 16px;
+      border-left: 3px solid var(--teal);
+      background: rgba(255, 255, 255, .76);
+    }
+
+    nav strong { display: block; margin-bottom: 9px; font-size: .9rem; }
+    nav a { display: block; padding: 5px 0; color: var(--muted); font-size: .86rem; text-decoration: none; }
+    nav a:hover { color: var(--ink); text-decoration: underline; }
+
+    main { min-width: 0; }
+    section { margin: 0 0 42px; scroll-margin-top: 24px; }
+    h2 { margin: 0 0 13px; font-size: 1.75rem; }
+    h3 { margin: 24px 0 8px; font-size: 1.14rem; }
+    p { margin: 10px 0; }
+    .muted { color: var(--muted); }
+
+    .diagram {
+      margin: 22px 0 20px;
+      padding: 18px;
+      overflow-x: auto;
+      border: 1px solid var(--line);
+      background: var(--surface);
+      box-shadow: var(--shadow);
+    }
+
+    .diagram svg { display: block; width: 100%; min-width: 760px; height: auto; }
+    .diagram figcaption { margin-top: 12px; color: var(--muted); font-size: .87rem; }
+    .diagram .box { stroke-width: 1.5; rx: 10; }
+    .diagram .box-blue { fill: var(--blue-soft); stroke: var(--blue); }
+    .diagram .box-teal { fill: var(--teal-soft); stroke: var(--teal); }
+    .diagram .box-orange { fill: var(--orange-soft); stroke: var(--orange); }
+    .diagram .box-green { fill: var(--green-soft); stroke: var(--green); }
+    .diagram .box-white { fill: #fff; stroke: #8da1a7; }
+    .diagram .title { fill: var(--ink); font-size: 16px; font-weight: 700; }
+    .diagram .sub { fill: #435c66; font-size: 12px; }
+    .diagram .edge { stroke: #607983; stroke-width: 2; fill: none; marker-end: url(#arrow); }
+    .diagram .edge-both { stroke: #607983; stroke-width: 2; fill: none; marker-start: url(#arrow); marker-end: url(#arrow); }
+    .diagram .edge-label { fill: #435c66; font-size: 11px; }
+
+    .callout {
+      margin: 18px 0;
+      padding: 14px 17px;
+      border-left: 4px solid var(--orange);
+      background: var(--orange-soft);
+    }
+
+    .callout p { margin: 0; }
+
+    .grid-2 { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 14px; margin: 16px 0; }
+    .panel { padding: 16px 18px; border: 1px solid var(--line); background: var(--surface); }
+    .panel h3 { margin: 0 0 7px; }
+    .panel p:last-child { margin-bottom: 0; }
+
+    .steps { display: grid; grid-template-columns: repeat(5, minmax(120px, 1fr)); gap: 9px; margin: 18px 0; counter-reset: step; }
+    .step { position: relative; min-height: 108px; padding: 14px 13px; border-top: 3px solid var(--teal); background: var(--surface); counter-increment: step; }
+    .step::before { content: "0" counter(step); display: block; margin-bottom: 8px; color: var(--teal); font-size: .74rem; font-weight: 800; }
+    .step strong { display: block; font-size: .9rem; }
+    .step span { display: block; margin-top: 5px; color: var(--muted); font-size: .8rem; }
+
+    table { width: 100%; margin: 16px 0; border-collapse: collapse; background: var(--surface); }
+    th, td { padding: 10px 12px; border: 1px solid var(--line); text-align: left; vertical-align: top; }
+    th { background: #e8efed; font-size: .9rem; }
+
+    pre {
+      margin: 15px 0;
+      padding: 17px 19px;
+      overflow-x: auto;
+      border-left: 3px solid var(--blue);
+      background: #eaf0f3;
+      color: #173341;
+      font-size: .88rem;
+      line-height: 1.55;
+    }
+
+    .source-list { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px 20px; margin: 15px 0; padding: 0; list-style: none; }
+    .source-list li { padding: 9px 0; border-bottom: 1px solid var(--line); }
+    .source-list span { display: block; color: var(--muted); font-size: .84rem; }
+
+    footer { padding: 22px 0 36px; border-top: 1px solid var(--line); color: var(--muted); font-size: .85rem; }
+
+    @media (max-width: 780px) {
+      .layout { grid-template-columns: 1fr; gap: 18px; }
+      nav { position: static; display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 0 14px; }
+      nav strong { grid-column: 1 / -1; }
+      .grid-2, .source-list { grid-template-columns: 1fr; }
+      .steps { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+      .masthead { padding-top: 32px; }
+    }
+
+    @media print {
+      body { background: #fff; }
+      .page { width: 100%; }
+      nav { display: none; }
+      .layout { display: block; padding-top: 18px; }
+      .diagram { box-shadow: none; break-inside: avoid; }
+      a { color: inherit; }
+    }
+  </style>
+</head>
+<body>
+  <header class="masthead">
+    <div class="page">
+      <p class="eyebrow">A code-reading guide to this repository</p>
+      <h1>How Terraform Reaches Linode</h1>
+      <p class="lede">Follow one managed database from HCL, through Terraform's provider protocol and this repository's resource implementation, to the Linode API. Valkey is the worked example; the same boundaries are used by other provider features.</p>
+      <div class="meta-row">
+        <span>Repository: terraform-provider-linode</span>
+        <span>Example: <code>linode_database_valkey_v2</code></span>
+        <span>Standalone HTML; no external assets required</span>
+      </div>
+    </div>
+  </header>
+
+  <div class="page layout">
+    <nav aria-label="Contents">
+      <strong>On this page</strong>
+      <a href="#architecture">Provider architecture</a>
+      <a href="#two-apis">Resource or data source?</a>
+      <a href="#valkey-path">Valkey request path</a>
+      <a href="#lifecycle">Resource lifecycle</a>
+      <a href="#adding">Adding an engine</a>
+      <a href="#repo-map">Repository map</a>
+      <a href="#tests">Testing and safety</a>
+    </nav>
+
+    <main>
+      <section id="architecture">
+        <h2>1. Provider architecture</h2>
+        <p>Terraform does not call Linode directly. Terraform Core loads the provider executable, speaks the Terraform Plugin Protocol to it, and stores the resource state returned by the provider. This repository translates Terraform operations into calls to <code>linodego</code>; <code>linodego</code> handles HTTP requests and Linode API types.</p>
+
+        <figure class="diagram">
+          <svg viewBox="0 0 1040 360" role="img" aria-labelledby="architecture-title architecture-desc">
+            <title id="architecture-title">Terraform provider architecture in this repository</title>
+            <desc id="architecture-desc">Terraform configuration and state connect to Terraform Core, which launches main.go. The protocol mux routes calls to the Plugin Framework provider or upgraded SDKv2 provider. Registered resource packages use linodego, which calls the Linode API. Responses flow back to Terraform state.</desc>
+            <defs>
+              <marker id="arrow" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M 0 0 L 10 5 L 0 10 z" fill="#607983" /></marker>
+            </defs>
+            <rect class="box box-white" x="12" y="28" width="155" height="100" />
+            <text class="title" x="89" y="59" text-anchor="middle">HCL + state</text>
+            <text class="sub" x="89" y="82" text-anchor="middle">configuration</text>
+            <text class="sub" x="89" y="99" text-anchor="middle">plan and state</text>
+
+            <rect class="box box-blue" x="205" y="28" width="155" height="100" />
+            <text class="title" x="282" y="59" text-anchor="middle">Terraform Core</text>
+            <text class="sub" x="282" y="82" text-anchor="middle">plans changes</text>
+            <text class="sub" x="282" y="99" text-anchor="middle">invokes provider RPC</text>
+
+            <rect class="box box-teal" x="399" y="28" width="165" height="100" />
+            <text class="title" x="481" y="59" text-anchor="middle">Provider process</text>
+            <text class="sub" x="481" y="82" text-anchor="middle">main.go</text>
+            <text class="sub" x="481" y="99" text-anchor="middle">Protocol 6 server</text>
+
+            <rect class="box box-orange" x="602" y="15" width="205" height="126" />
+            <text class="title" x="704" y="44" text-anchor="middle">Protocol mux</text>
+            <text class="sub" x="704" y="68" text-anchor="middle">Framework provider</text>
+            <text class="sub" x="704" y="88" text-anchor="middle">upgraded SDKv2 provider</text>
+            <text class="sub" x="704" y="112" text-anchor="middle">both serve one provider</text>
+
+            <rect class="box box-green" x="845" y="28" width="180" height="100" />
+            <text class="title" x="935" y="59" text-anchor="middle">Resource package</text>
+            <text class="sub" x="935" y="82" text-anchor="middle">schema + model</text>
+            <text class="sub" x="935" y="99" text-anchor="middle">CRUD / read</text>
+
+            <path class="edge-both" d="M 167 78 L 205 78" />
+            <path class="edge-both" d="M 360 78 L 399 78" />
+            <path class="edge-both" d="M 564 78 L 602 78" />
+            <path class="edge-both" d="M 807 78 L 845 78" />
+
+            <rect class="box box-blue" x="305" y="205" width="195" height="92" />
+            <text class="title" x="402" y="237" text-anchor="middle">linodego Client</text>
+            <text class="sub" x="402" y="261" text-anchor="middle">typed API methods</text>
+            <text class="sub" x="402" y="279" text-anchor="middle">HTTP, auth, responses</text>
+
+            <rect class="box box-teal" x="572" y="205" width="218" height="92" />
+            <text class="title" x="681" y="237" text-anchor="middle">Linode API</text>
+            <text class="sub" x="681" y="261" text-anchor="middle">managed database service</text>
+            <text class="sub" x="681" y="279" text-anchor="middle">events and status</text>
+
+            <path class="edge-both" d="M 935 128 C 935 170, 500 165, 500 222" />
+            <text class="edge-label" x="760" y="166" text-anchor="middle">resource invokes client methods</text>
+            <path class="edge-both" d="M 500 251 L 572 251" />
+            <text class="edge-label" x="536" y="238" text-anchor="middle">API requests</text>
+
+            <text class="sub" x="520" y="335" text-anchor="middle">Arrows are bidirectional: API responses are flattened into Terraform state.</text>
+          </svg>
+          <figcaption>The executable composes two implementation generations: the Plugin Framework provider and the legacy SDKv2 provider upgraded to Protocol 6, then served through one mux.</figcaption>
+        </figure>
+
+        <div class="grid-2">
+          <div class="panel">
+            <h3>Why the mux exists</h3>
+            <p>The provider is being migrated incrementally. New managed database resources use the Plugin Framework, while legacy SDKv2 resources continue to work. <a href="../../main.go"><code>main.go</code></a> upgrades the SDKv2 server, creates both protocol servers, and passes them to <code>tf6muxserver</code>.</p>
+          </div>
+          <div class="panel">
+            <h3>Where configuration becomes a client</h3>
+            <p><a href="../../linode/framework_provider_config.go"><code>FrameworkProvider.Configure</code></a> reads provider configuration, applies defaults, initializes or reuses the Linode client, then shares provider metadata with resources and data sources.</p>
+          </div>
+        </div>
+      </section>
+
+      <section id="two-apis">
+        <h2>2. Resource or data source?</h2>
+        <p>Both are registered APIs, but their relationship with Terraform state differs. A resource owns a remote object's lifecycle. A data source reads an object and returns computed values; it does not create or update that object.</p>
+        <table>
+          <thead><tr><th>Terraform construct</th><th>What Terraform asks for</th><th>Valkey implementation</th></tr></thead>
+          <tbody>
+            <tr><td><code>resource "linode_database_valkey_v2"</code></td><td>Create, refresh, update, import, and delete a managed cluster.</td><td><a href="../../linode/databasevalkeyv2/framework_resource.go"><code>framework_resource.go</code></a></td></tr>
+            <tr><td><code>data "linode_database_valkey_v2"</code></td><td>Read an existing cluster by ID and expose its computed values.</td><td><a href="../../linode/databasevalkeyv2/framework_datasource.go"><code>framework_datasource.go</code></a></td></tr>
+            <tr><td><code>data "linode_databases"</code></td><td>List/filter database clusters across engines.</td><td><a href="../../linode/databases/framework_models.go"><code>linode/databases</code></a></td></tr>
+          </tbody>
+        </table>
+        <p>The resource and single-instance data source share the same <code>Model</code> and API flattening logic. Their schemas differ: resource schema includes configuration and plan behavior; data-source schema exposes computed values plus the required ID.</p>
+      </section>
+
+      <section id="valkey-path">
+        <h2>3. The Valkey request path</h2>
+        <p>Adding an engine is not adding a new Terraform runtime. It is adding a new package behind the provider's existing resource/data-source interfaces and using the engine-specific methods supplied by <code>linodego</code>.</p>
+        <figure class="diagram">
+          <svg viewBox="0 0 1040 235" role="img" aria-labelledby="valkey-title valkey-desc">
+            <title id="valkey-title">Registration path for the Valkey resource</title>
+            <desc id="valkey-desc">HCL resource type is matched to a constructor registered in framework_provider.go. The constructor supplies a resource schema and model, while CRUD methods call the Linode client and flatten responses into state.</desc>
+            <defs><marker id="arrow2" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M 0 0 L 10 5 L 0 10 z" fill="#607983" /></marker></defs>
+            <g fill="none" stroke="#607983" stroke-width="2" marker-end="url(#arrow2)">
+              <path d="M 185 103 L 220 103" /><path d="M 388 103 L 423 103" /><path d="M 591 103 L 626 103" /><path d="M 794 103 L 829 103" />
+            </g>
+            <rect class="box box-white" x="12" y="58" width="173" height="90" />
+            <text class="title" x="98" y="88" text-anchor="middle">HCL type name</text>
+            <text class="sub" x="98" y="113" text-anchor="middle">linode_database_</text>
+            <text class="sub" x="98" y="130" text-anchor="middle">valkey_v2</text>
+            <rect class="box box-blue" x="220" y="58" width="168" height="90" />
+            <text class="title" x="304" y="88" text-anchor="middle">Registration</text>
+            <text class="sub" x="304" y="114" text-anchor="middle">framework_provider.go</text>
+            <text class="sub" x="304" y="131" text-anchor="middle">NewResource / NewDataSource</text>
+            <rect class="box box-teal" x="423" y="58" width="168" height="90" />
+            <text class="title" x="507" y="88" text-anchor="middle">Contract</text>
+            <text class="sub" x="507" y="114" text-anchor="middle">schema + typed Model</text>
+            <text class="sub" x="507" y="131" text-anchor="middle">validators + modifiers</text>
+            <rect class="box box-orange" x="626" y="58" width="168" height="90" />
+            <text class="title" x="710" y="88" text-anchor="middle">Behavior</text>
+            <text class="sub" x="710" y="114" text-anchor="middle">Create / Read / Update</text>
+            <text class="sub" x="710" y="131" text-anchor="middle">Delete / data source Read</text>
+            <rect class="box box-green" x="829" y="58" width="197" height="90" />
+            <text class="title" x="927" y="88" text-anchor="middle">linodego</text>
+            <text class="sub" x="927" y="114" text-anchor="middle">Valkey client methods</text>
+            <text class="sub" x="927" y="131" text-anchor="middle">events + API object</text>
+            <text class="sub" x="520" y="198" text-anchor="middle">API response is flattened to state; planned values are expanded into create/update requests.</text>
+          </svg>
+          <figcaption>The registration is the discovery point. The package owns the Terraform contract and lifecycle; the client library owns API transport and wire types.</figcaption>
+        </figure>
+
+        <h3>The public contract</h3>
+        <p><a href="../../linode/databasevalkeyv2/framework_resource_schema.go"><code>framework_resource_schema.go</code></a> declares required identity/location fields, optional/computed engine configuration, validators, replacement rules, sensitive credentials, private networking, suspension, and snapshot outputs. Terraform validates and plans against this contract before CRUD runs.</p>
+        <pre><code>resource "linode_database_valkey_v2" "cache" {
+  label     = "cache-prod"
+  region    = "us-mia"
+  type      = "g7-dedicated-4-2"
+  engine_id = "valkey/8.1"
+
+  engine_config_valkey_persistence = "rdb"
+}
+
+data "linode_database_valkey_v2" "cache" {
+  id = linode_database_valkey_v2.cache.id
+}</code></pre>
+        <p><a href="../../linode/databasevalkeyv2/framework_models.go"><code>framework_models.go</code></a> is the translation boundary. <code>GetEngineConfig</code> converts known Terraform values into linodego option types; <code>Flatten</code> converts the API model into Terraform state. Known zero and false values are meaningful. Unknown values are not request values. For nullable fields, the model must preserve the difference between unmanaged/null and an explicit value.</p>
+      </section>
+
+      <section id="lifecycle">
+        <h2>4. What happens during apply</h2>
+        <p>Terraform first computes a plan. At apply time it invokes the resource method selected by the planned operation. The provider performs API work, waits for asynchronous operations where required, refreshes the API object, then writes the result back to state.</p>
+        <figure class="diagram">
+          <svg viewBox="0 0 1040 330" role="img" aria-labelledby="lifecycle-title lifecycle-desc">
+            <title id="lifecycle-title">Valkey create and update lifecycle</title>
+            <desc id="lifecycle-desc">Create reads the plan, creates an event poller before the API call, persists the returned ID, waits for the event and active status, applies maintenance updates and requested suspension, then refreshes and saves state. Update compares planned and prior state, prepares event pollers, sends changed fields, waits, refreshes, and saves.</desc>
+            <defs><marker id="arrow3" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M 0 0 L 10 5 L 0 10 z" fill="#607983" /></marker></defs>
+            <text class="title" x="520" y="27" text-anchor="middle">Create</text>
+            <g fill="none" stroke="#607983" stroke-width="2" marker-end="url(#arrow3)">
+              <path d="M 178 79 L 213 79" /><path d="M 389 79 L 424 79" /><path d="M 600 79 L 635 79" /><path d="M 811 79 L 846 79" />
+            </g>
+            <rect class="box box-white" x="10" y="48" width="168" height="66" />
+            <text class="title" x="94" y="74" text-anchor="middle">Read Terraform plan</text><text class="sub" x="94" y="96" text-anchor="middle">decode typed values</text>
+            <rect class="box box-blue" x="213" y="48" width="176" height="66" />
+            <text class="title" x="301" y="74" text-anchor="middle">Prepare event poller</text><text class="sub" x="301" y="96" text-anchor="middle">before create request</text>
+            <rect class="box box-teal" x="424" y="48" width="176" height="66" />
+            <text class="title" x="512" y="74" text-anchor="middle">Create Valkey DB</text><text class="sub" x="512" y="96" text-anchor="middle">persist ID immediately</text>
+            <rect class="box box-orange" x="635" y="48" width="176" height="66" />
+            <text class="title" x="723" y="74" text-anchor="middle">Wait for readiness</text><text class="sub" x="723" y="96" text-anchor="middle">event and active status</text>
+            <rect class="box box-green" x="846" y="48" width="180" height="66" />
+            <text class="title" x="936" y="74" text-anchor="middle">Refresh and save</text><text class="sub" x="936" y="96" text-anchor="middle">API object to state</text>
+
+            <text class="title" x="520" y="166" text-anchor="middle">Update</text>
+            <g fill="none" stroke="#607983" stroke-width="2" marker-end="url(#arrow3)">
+              <path d="M 178 218 L 213 218" /><path d="M 389 218 L 424 218" /><path d="M 600 218 L 635 218" /><path d="M 811 218 L 846 218" />
+            </g>
+            <rect class="box box-white" x="10" y="187" width="168" height="66" />
+            <text class="title" x="94" y="213" text-anchor="middle">Compare plan/state</text><text class="sub" x="94" y="235" text-anchor="middle">identify changed fields</text>
+            <rect class="box box-blue" x="213" y="187" width="176" height="66" />
+            <text class="title" x="301" y="213" text-anchor="middle">Classify operation</text><text class="sub" x="301" y="235" text-anchor="middle">update, resize, suspend</text>
+            <rect class="box box-teal" x="424" y="187" width="176" height="66" />
+            <text class="title" x="512" y="213" text-anchor="middle">Call client</text><text class="sub" x="512" y="235" text-anchor="middle">send only planned changes</text>
+            <rect class="box box-orange" x="635" y="187" width="176" height="66" />
+            <text class="title" x="723" y="213" text-anchor="middle">Wait and reconcile</text><text class="sub" x="723" y="235" text-anchor="middle">event, status, suspension</text>
+            <rect class="box box-green" x="846" y="187" width="180" height="66" />
+            <text class="title" x="936" y="213" text-anchor="middle">Refresh and save</text><text class="sub" x="936" y="235" text-anchor="middle">computed values to state</text>
+            <text class="sub" x="520" y="298" text-anchor="middle">Timeouts bound provider waits. On create failure after ID persistence, state retains the ID for recovery.</text>
+          </svg>
+          <figcaption>The flow follows <a href="../../linode/databasevalkeyv2/framework_resource.go"><code>framework_resource.go</code></a>. Event and status waits matter because a successful API request does not mean the database is ready.</figcaption>
+        </figure>
+
+        <div class="grid-2">
+          <div class="panel">
+            <h3>Snapshot restore is discrete</h3>
+            <p><code>available_restore_times</code> is an API-provided inventory. A fork can use one listed timestamp or omit the timestamp to request the latest snapshot. It is not arbitrary point-in-time recovery. Persistence mode <code>off</code> disables backups/forks.</p>
+          </div>
+          <div class="panel">
+            <h3>Suspended refresh is different</h3>
+            <p>When the API reports a suspended state, the model skips SSL and credential reads and preserves known credential/certificate state. The schema marks these values sensitive, but Terraform state still needs normal protection.</p>
+          </div>
+        </div>
+      </section>
+
+      <section id="adding">
+        <h2>5. How to add another Linode capability</h2>
+        <p>Use a neighboring resource as the template, then change only what the API contract requires. Managed database packages are intentionally self-contained: registration points to constructors, the schema defines Terraform behavior, the model translates values, and resource methods orchestrate the API lifecycle.</p>
+        <div class="steps" aria-label="Feature implementation sequence">
+          <div class="step"><strong>Confirm API types</strong><span>Find or add typed linodego methods; verify pointer/null semantics.</span></div>
+          <div class="step"><strong>Define schema</strong><span>Choose required, optional, computed, validators, sensitivity, replacement.</span></div>
+          <div class="step"><strong>Implement model</strong><span>Flatten responses and expand known plan values.</span></div>
+          <div class="step"><strong>Implement lifecycle</strong><span>Call API, persist IDs, poll events/status, refresh state.</span></div>
+          <div class="step"><strong>Register and verify</strong><span>Add factories, tests, docs, and dependency/build checks.</span></div>
+        </div>
+        <h3>What is Valkey-specific</h3>
+        <ul>
+          <li>Its API client methods and engine slug, such as <code>valkey/8.1</code>.</li>
+          <li>Thirteen flat engine configuration fields, including nullable backup timing and nullable max-memory policy.</li>
+          <li>Discrete restore snapshots rather than an oldest-time/continuous-PITR contract.</li>
+          <li>Its supported update/event behavior and suspension endpoints.</li>
+        </ul>
+        <p>What is not new: Terraform resource registration, provider metadata, typed state conversion, diagnostics, timeouts, import, and API-client use. Those follow the existing MySQL/PostgreSQL Plugin Framework patterns.</p>
+      </section>
+
+      <section id="repo-map">
+        <h2>6. Where to read the code</h2>
+        <ul class="source-list">
+          <li><a href="../../main.go"><code>main.go</code></a><span>Starts the protocol server and combines Framework and SDKv2 providers.</span></li>
+          <li><a href="../../linode/framework_provider.go"><code>linode/framework_provider.go</code></a><span>Registers Framework resources and data sources.</span></li>
+          <li><a href="../../linode/framework_provider_config.go"><code>linode/framework_provider_config.go</code></a><span>Loads provider settings and initializes shared client metadata.</span></li>
+          <li><a href="../../linode/databasevalkeyv2/framework_resource_schema.go"><code>Valkey resource schema</code></a><span>Terraform's input/output contract and plan behavior.</span></li>
+          <li><a href="../../linode/databasevalkeyv2/framework_models.go"><code>Valkey models</code></a><span>API-to-state and plan-to-request translation.</span></li>
+          <li><a href="../../linode/databasevalkeyv2/framework_resource.go"><code>Valkey resource lifecycle</code></a><span>Create, read, update, delete, waits, import state.</span></li>
+          <li><a href="../../linode/databasevalkeyv2/framework_datasource.go"><code>Valkey data source</code></a><span>Read-only lookup by ID.</span></li>
+          <li><a href="../../linode/helper/databaseshared"><code>database shared helpers</code></a><span>Maintenance, private network, engine IDs, suspension.</span></li>
+          <li><a href="../../linode/databasemysqlv2"><code>MySQL v2 package</code></a> and <a href="../../linode/databasepostgresqlv2"><code>PostgreSQL v2 package</code></a><span>Closest peer patterns for resource and data-source parity.</span></li>
+        </ul>
+      </section>
+
+      <section id="tests">
+        <h2>7. Testing and safety</h2>
+        <table>
+          <thead><tr><th>Check</th><th>What it tells you</th><th>External effects</th></tr></thead>
+          <tbody>
+            <tr><td><code>make PKG_NAME=databasevalkeyv2 test-unit</code></td><td>Model conversion, null/unknown handling, snapshot behavior.</td><td>No Linode API calls.</td></tr>
+            <tr><td><code>make PKG_NAME=helper/databaseshared test-unit</code></td><td>Engine-slug and suspension helper behavior.</td><td>No Linode API calls.</td></tr>
+            <tr><td><code>go build ./...</code></td><td>Provider compiles against the selected linodego version.</td><td>May download modules/toolchain.</td></tr>
+            <tr><td><code>make TEST_SUITE=databasevalkeyv2 test-int</code></td><td>End-to-end create/update/read/delete behavior.</td><td>Requires credentials, Valkey account access, and creates billable resources.</td></tr>
+          </tbody>
+        </table>
+        <div class="callout"><p><strong>Dependency gate:</strong> A local workspace can validate an in-flight linodego change, but a mergeable provider change needs a released or approved immutable dependency version. Check the client signatures and Go version before updating <code>go.mod</code>; do not commit a machine-local workspace or replacement.</p></div>
+        <p>For more detail, see <a href="../../AGENTS.md">the repository contributor instructions</a>.</p>
+      </section>
+    </main>
+  </div>
+
+  <footer>
+    <div class="page">A repository guide, not an API guarantee. Confirm supported engine IDs, plan types, regions, and account availability against the current Linode API and client library.</div>
+  </footer>
+</body>
+</html>

@@ -1,0 +1,16 @@
+{
+	"folders": [
+		{
+			"path": "../.."
+		},
+		{
+			"path": "../../../linodego"
+		}
+	],
+	"settings": {
+		"makefile.configureOnOpen": false,
+		"chat.tools.terminal.autoApprove": {
+			"gofmt": true
+		}
+	}
+}
